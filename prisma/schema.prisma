@@ -1,0 +1,337 @@
+// NamyaAstro customer backend data model.
+// Money is stored in whole rupees (Int), matching the app's prices.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Lang {
+  en
+  hi
+}
+
+enum Relation {
+  Self
+  Spouse
+  Child
+  Parent
+  Sibling
+  Other
+}
+
+enum Service {
+  astrology
+  tarot
+}
+
+enum Mode {
+  chat
+  voice
+}
+
+enum Gender {
+  male
+  female
+}
+
+enum BookingStatus {
+  upcoming
+  live
+  completed
+  no_show
+  cancelled
+  interrupted
+}
+
+enum TxnType {
+  credit
+  debit
+}
+
+enum TxnReason {
+  topup
+  consultation
+  no_show
+  report
+  refund
+  adjustment
+}
+
+enum PaymentStatus {
+  created
+  paid
+  failed
+}
+
+enum ReportBilling {
+  one_time
+  monthly
+}
+
+enum ReportStatus {
+  ordered
+  in_preparation
+  ready
+}
+
+enum TicketStatus {
+  open
+  in_progress
+  resolved
+}
+
+enum NotificationKind {
+  booking
+  session
+  wallet
+  report
+  tarot
+  support
+}
+
+enum MessageSender {
+  customer
+  practitioner
+  system
+}
+
+model User {
+  id                    String    @id @default(uuid())
+  phone                 String    @unique
+  lang                  Lang      @default(en)
+  recordingConsent      Boolean   @default(false)
+  recordingConsentAt    DateTime?
+  fcmTokens             String[]  @default([])
+  tarotWaitlistOptOutAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  profiles      Profile[]
+  wallet        Wallet?
+  bookings      Booking[]
+  reportOrders  ReportOrder[]
+  tickets       SupportTicket[]
+  notifications Notification[]
+  payments      Payment[]
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A person the customer consults for (self, spouse, child...). Birth details drive the chart.
+model Profile {
+  id             String    @id @default(uuid())
+  userId         String
+  name           String
+  relation       Relation
+  dob            String // YYYY-MM-DD
+  tob            String // HH:MM (24h)
+  tobApproximate Boolean   @default(false)
+  place          String
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+  reportOrders ReportOrder[]
+
+  @@index([userId])
+}
+
+model Practitioner {
+  id              String   @id @default(uuid())
+  code            String   @unique // short public id, e.g. a1, t1
+  name            String
+  service         Service
+  gender          Gender
+  languages       String[]
+  experienceYears Int
+  rating          Float    @default(0)
+  active          Boolean  @default(true)
+  /// Hours of the day (0-23, IST) the practitioner works. Drives slot capacity.
+  workingHours    Int[]    @default([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22])
+  createdAt       DateTime @default(now())
+
+  bookings Booking[]
+}
+
+/// One wallet per user. `balance` is a cached sum of the ledger, updated in the same DB transaction.
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  balance   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  user User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  txns WalletTransaction[]
+}
+
+/// Append-only ledger. `reference` makes every money movement idempotent.
+model WalletTransaction {
+  id           String    @id @default(uuid())
+  walletId     String
+  type         TxnType
+  reason       TxnReason
+  amount       Int
+  balanceAfter Int
+  label        String
+  method       String?
+  reference    String    @unique
+  createdAt    DateTime  @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  userId          String
+  amount          Int
+  status          PaymentStatus @default(created)
+  provider        String        @default("razorpay")
+  providerOrderId String        @unique
+  providerPayId   String?
+  method          String?
+  failureReason   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Booking {
+  id               String        @id @default(uuid())
+  userId           String
+  profileId        String
+  practitionerId   String?
+  service          Service
+  mode             Mode
+  slotStart        DateTime
+  category         String?
+  questions        String[]      @default([])
+  note             String?
+  status           BookingStatus @default(upcoming)
+  rescheduleCount  Int           @default(0)
+  lastRescheduledAt DateTime?
+  practitionerReadyAt DateTime?
+  customerJoinedAt DateTime?
+  startedAt        DateTime?
+  endedAt          DateTime?
+  endedBy          String?
+  durationSec      Int?
+  charged          Int?
+  rating           Int?
+  feedback         String?
+  remedies         String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile      Profile        @relation(fields: [profileId], references: [id])
+  practitioner Practitioner?  @relation(fields: [practitionerId], references: [id])
+  messages     ChatMessage[]
+
+  @@index([userId, slotStart])
+  @@index([practitionerId, slotStart])
+  @@index([status, slotStart])
+}
+
+model ChatMessage {
+  id        String        @id @default(uuid())
+  bookingId String
+  sender    MessageSender
+  text      String
+  createdAt DateTime      @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, createdAt])
+}
+
+model ReportType {
+  id          String        @id
+  name        String
+  nameHi      String?
+  description String
+  price       Int
+  billing     ReportBilling
+  icon        String
+  active      Boolean       @default(true)
+
+  orders ReportOrder[]
+}
+
+model ReportOrder {
+  id           String       @id @default(uuid())
+  userId       String
+  profileId    String
+  reportTypeId String
+  questions    String       @default("")
+  status       ReportStatus @default(ordered)
+  amount       Int
+  fileUrl      String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile    Profile    @relation(fields: [profileId], references: [id])
+  reportType ReportType @relation(fields: [reportTypeId], references: [id])
+
+  @@index([userId])
+}
+
+model SupportTicket {
+  id        String       @id @default(uuid())
+  userId    String
+  subject   String
+  category  String
+  message   String
+  status    TicketStatus @default(open)
+  reply     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  kind      NotificationKind
+  title     String
+  body      String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+/// Admin-controlled business values (prices, minimums, cut-offs). Key/value JSON.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

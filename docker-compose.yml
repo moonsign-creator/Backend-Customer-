@@ -1,0 +1,15 @@
+# Local Postgres + Redis for development. The API itself runs with `npm run start:dev`.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: namya
+      POSTGRES_PASSWORD: namya
+      POSTGRES_DB: namya
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+volumes:
+  pgdata:
